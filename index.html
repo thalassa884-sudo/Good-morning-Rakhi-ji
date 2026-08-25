@@ -8,8 +8,8 @@
 <title>Good Morning, Rakhi</title>
 <!--
   Fonts: Cormorant Garamond & Jost via Fontsource (SIL Open Font License).
-  Everything else — artwork, motion, sound (synthesized), haptics — is original,
-  dependency-free, and implemented with SVG + CSS + Web APIs.
+  Music: composed & synthesized live with the Web Audio API — original,
+  copyright-free, no external audio files. Everything else is SVG + CSS + Web APIs.
 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/cormorant-garamond/400-italic.css"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/cormorant-garamond/500-italic.css"/>
@@ -379,7 +379,7 @@ function scheduleMeteor(delay) {
   }, delay);
 }
 
-/* ---------- audio (synthesized heartbeat — no external assets) ---------- */
+/* ---------- audio core (all synthesized — no external files) ---------- */
 let AC = null, master = null, heartGain = null, hbTimer = null, swellDone = false;
 function ensureAudio() {
   if (!AC) {
@@ -458,6 +458,156 @@ function morningSwell() {
   src.start(t); src.stop(t + 16.5);
 }
 
+/* ---------- music: a gentle original theme, composed in-code ----------
+   F-major pentatonic, ~64 bpm: warm pads + soft bell melody + low root.
+   Starts the moment her finger touches the heart. */
+let musicBus = null, spatial = null, musicTimer = null, barIndex = 0, nextBarTime = 0, lastMelody = 3;
+const BPM = 64, BAR = 60 / BPM * 4;
+const PROG = [
+  [53, 57, 60, 64], /* Fmaj7  */
+  [57, 60, 64, 67], /* Am7    */
+  [50, 53, 57, 60], /* Dm7    */
+  [48, 52, 55, 59]  /* Cmaj7  */
+];
+const POOL = [72, 74, 77, 79, 81, 84, 86]; /* C5 D5 F5 G5 A5 C6 D6 */
+const fq = m => 440 * Math.pow(2, (m - 69) / 12);
+
+function buildMusicGraph() {
+  musicBus = AC.createGain(); musicBus.gain.value = 0;
+  const warm = AC.createBiquadFilter(); warm.type = "lowpass"; warm.frequency.value = 3400;
+  musicBus.connect(warm); warm.connect(master);
+  /* small airy space: one damped feedback delay */
+  spatial = AC.createGain();
+  const dry = AC.createGain(); dry.gain.value = 0.82;
+  const dly = AC.createDelay(1); dly.delayTime.value = 0.44;
+  const fb = AC.createGain(); fb.gain.value = 0.32;
+  const damp = AC.createBiquadFilter(); damp.type = "lowpass"; damp.frequency.value = 2100;
+  const wet = AC.createGain(); wet.gain.value = 0.34;
+  spatial.connect(dry); dry.connect(musicBus);
+  spatial.connect(dly); dly.connect(damp); damp.connect(fb); fb.connect(dly);
+  damp.connect(wet); wet.connect(musicBus);
+}
+function pad(chord, t, dur) {
+  chord.forEach((m, i) => {
+    [-3.5, 3.5].forEach(dt => {
+      const o = AC.createOscillator();
+      o.type = i % 2 ? "triangle" : "sine";
+      o.frequency.value = fq(m); o.detune.value = dt;
+      const g = AC.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.021, t + 2.3);
+      g.gain.setValueAtTime(0.021, t + dur - 2.5);
+      g.gain.linearRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(musicBus);
+      o.start(t); o.stop(t + dur + 0.1);
+    });
+  });
+}
+function bassNote(m, t) {
+  const o = AC.createOscillator(); o.type = "sine"; o.frequency.value = fq(m);
+  const f = AC.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 260;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.11, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + BAR * 0.92);
+  o.connect(f); f.connect(g); g.connect(musicBus);
+  o.start(t); o.stop(t + BAR);
+}
+function bell(m, t, vol) {
+  const o = AC.createOscillator(); o.type = "sine"; o.frequency.value = fq(m);
+  const o2 = AC.createOscillator(); o2.type = "sine"; o2.frequency.value = fq(m) * 2.01;
+  const g = AC.createGain(), g2 = AC.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
+  g2.gain.setValueAtTime(0, t);
+  g2.gain.linearRampToValueAtTime(vol * 0.28, t + 0.012);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+  o.connect(g); o2.connect(g2); g.connect(spatial); g2.connect(spatial);
+  o.start(t); o.stop(t + 2); o2.start(t); o2.stop(t + 1);
+}
+function scheduleBar(t, chord) {
+  pad(chord, t, BAR + 0.5);
+  bassNote(chord[0] - 12, t + 0.02);
+  if (Math.random() < 0.82) { /* let the music breathe sometimes */
+    const count = 2 + Math.floor(Math.random() * 3);
+    const used = new Set();
+    for (let n = 0; n < count; n++) {
+      const slot = Math.floor(Math.random() * 8);
+      if (used.has(slot)) continue; used.add(slot);
+      const step = [-2, -1, -1, 0, 1, 1, 2][Math.floor(Math.random() * 7)];
+      lastMelody = Math.max(1, Math.min(POOL.length - 2, lastMelody + step));
+      bell(POOL[lastMelody], t + slot * (BAR / 8) + Math.random() * 0.02, 0.1 + Math.random() * 0.05);
+    }
+  }
+}
+function startMusic() {
+  if (musicTimer || !AC) return;
+  const begin = () => {
+    if (musicTimer) return;
+    buildMusicGraph();
+    const t0 = AC.currentTime;
+    musicBus.gain.setValueAtTime(0, t0);
+    musicBus.gain.linearRampToValueAtTime(0.85, t0 + 4);
+    /* a tiny waking chime, right under her fingertip */
+    bell(84, t0 + 0.06, 0.20);
+    bell(81, t0 + 0.50, 0.17);
+    bell(77, t0 + 0.95, 0.15);
+    barIndex = 0; nextBarTime = t0 + 0.2;
+/* ---------- music: custom MP3 attachment ----------
+   Place your file at: assets/audio/morning-music.mp3
+   The track fades in gently on heart touch, swells at message reveal,
+   and respects browser autoplay policies. */
+let musicAudio = null;
+
+function startMusic() {
+  if (musicAudio || !AC) return;
+  const begin = () => {
+    if (musicAudio) return;
+    musicAudio = new Audio('assets/audio/morning-music.mp3');
+    musicAudio.loop = true;
+    musicAudio.preload = 'auto';
+    musicAudio.volume = 0;
+
+    // Gentle 4s fade-in matching the original pad swell
+    const fadeIn = setInterval(() => {
+      if (!musicAudio) { clearInterval(fadeIn); return; }
+      if (musicAudio.volume < 0.85) {
+        musicAudio.volume = Math.min(0.85, musicAudio.volume + 0.02);
+      } else {
+        clearInterval(fadeIn);
+      }
+    }, 80);
+
+    musicAudio.play().catch(() => {
+      // Graceful fallback: if playback is still blocked, retry once after short delay
+      setTimeout(() => musicAudio?.play().catch(() => {}), 100);
+    });
+  };
+
+  if (AC.state === 'running') begin();
+  else AC.addEventListener('statechange', function oc() {
+    if (AC.state === 'running') {
+      AC.removeEventListener('statechange', oc);
+      begin();
+    }
+  });
+}
+
+function musicSwell() {
+  if (!musicAudio) return;
+  // Gentle volume lift when "Good Morning Rakhi" appears
+  const target = Math.min(1.0, musicAudio.volume + 0.15);
+  const swell = setInterval(() => {
+    if (!musicAudio) { clearInterval(swell); return; }
+    if (musicAudio.volume < target) {
+      musicAudio.volume = Math.min(target, musicAudio.volume + 0.008);
+    } else {
+      clearInterval(swell);
+    }
+  }, 60);
+}
+
 /* ---------- haptics ---------- */
 const canVibrate = "vibrate" in navigator;
 function haptic(p) { if (!canVibrate) return; try { navigator.vibrate(p); } catch (e) {} }
@@ -514,6 +664,7 @@ function ignite() {
   setPhase("touch");
   haptic([9, 90, 14]);
   unlockAudio(true);
+  startMusic();
   hit.disabled = true;
   const beatEl = $("beatG");
   if (!REDUCED) {
@@ -541,7 +692,7 @@ function runTransition() {
   T(() => morningSwell(), R ? 800 : 3300);
   T(() => birdsSvg.classList.add("on"), R ? 1200 : 4400);
   T(() => { setPhase("morning"); setTheme("#ffe0b4"); }, R ? 1600 : 6400);
-  T(() => { setPhase("message"); liveMsg.textContent = "Good morning, Rakhi."; setTheme("#ffe6c0"); }, R ? 2600 : 9600);
+  T(() => { setPhase("message"); musicSwell(); liveMsg.textContent = "Good morning, Rakhi."; setTheme("#ffe6c0"); }, R ? 2600 : 9600);
   T(() => { setPhase("complete"); fadeHeartbeat(); }, R ? 4200 : 12200);
 }
 hit.addEventListener("pointerdown", () => ignite());
